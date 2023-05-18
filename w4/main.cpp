@@ -1,17 +1,7 @@
-// initial skeleton is a clone from https://github.com/jpcy/bgfx-minimal-example
-//
-#include <bx/bx.h>
-#include <bgfx/bgfx.h>
-#include <bgfx/platform.h>
-#include <bx/timer.h>
-#include <debugdraw/debugdraw.h>
 #include <functional>
-#include "app.h"
+#include <algorithm> // min/max
+#include "raylib.h"
 #include <enet/enet.h>
-
-//for scancodes
-#include <GLFW/glfw3.h>
-
 
 #include <vector>
 #include "entity.h"
@@ -21,165 +11,190 @@
 static std::vector<Entity> entities;
 static uint16_t my_entity = invalid_entity;
 
-void on_new_entity_packet(ENetPacket *packet)
+void on_my_entity_eat(ENetPacket* packet)
 {
-  Entity newEntity;
-  deserialize_new_entity(packet, newEntity);
-  // TODO: Direct adressing, of course!
-  for (const Entity &e : entities)
-    if (e.eid == newEntity.eid)
-      return; // don't need to do anything, we already have entity
-  entities.push_back(newEntity);
-}
-
-void on_set_controlled_entity(ENetPacket *packet)
-{
-  deserialize_set_controlled_entity(packet, my_entity);
-}
-
-void on_snapshot(ENetPacket *packet)
-{
-  uint16_t eid = invalid_entity;
-  float x = 0.f; float y = 0.f;
-  deserialize_snapshot(packet, eid, x, y);
-  // TODO: Direct adressing, of course!
-  for (Entity &e : entities)
-    if (e.eid == eid)
-    {
-      e.x = x;
-      e.y = y;
-    }
-}
-
-int main(int argc, const char **argv)
-{
-  if (enet_initialize() != 0)
-  {
-    printf("Cannot init ENet");
-    return 1;
-  }
-
-  ENetHost *client = enet_host_create(nullptr, 1, 2, 0, 0);
-  if (!client)
-  {
-    printf("Cannot create ENet client\n");
-    return 1;
-  }
-
-  ENetAddress address;
-  enet_address_set_host(&address, "localhost");
-  address.port = 10131;
-
-  ENetPeer *serverPeer = enet_host_connect(client, &address, 2, 0);
-  if (!serverPeer)
-  {
-    printf("Cannot connect to server");
-    return 1;
-  }
-
-  int width = 1920;
-  int height = 1080;
-  if (!app_init(width, height))
-    return 1;
-  ddInit();
-
-  bx::Vec3 eye(0.f, 0.f, -16.f);
-  bx::Vec3 at(0.f, 0.f, 0.f);
-  bx::Vec3 up(0.f, 1.f, 0.f);
-
-  float view[16];
-  float proj[16];
-  bx::mtxLookAt(view, bx::load<bx::Vec3>(&eye.x), bx::load<bx::Vec3>(&at.x), bx::load<bx::Vec3>(&up.x) );
-
-
-  bool connected = false;
-  int64_t now = bx::getHPCounter();
-  int64_t last = now;
-  float dt = 0.f;
-  while (!app_should_close())
-  {
-    ENetEvent event;
-    while (enet_host_service(client, &event, 0) > 0)
-    {
-      switch (event.type)
-      {
-      case ENET_EVENT_TYPE_CONNECT:
-        printf("Connection with %x:%u established\n", event.peer->address.host, event.peer->address.port);
-        send_join(serverPeer);
-        connected = true;
-        break;
-      case ENET_EVENT_TYPE_RECEIVE:
-        switch (get_packet_type(event.packet))
+    uint16_t eid = invalid_entity;
+    float bodySize = 10.f;
+    float size;
+    deserialize_entity_eat(packet, eid, bodySize);
+    // TODO: Direct adressing, of course!
+    for (Entity& e : entities)
+        if (e.eid == eid)
         {
-        case E_SERVER_TO_CLIENT_NEW_ENTITY:
-          on_new_entity_packet(event.packet);
-          break;
-        case E_SERVER_TO_CLIENT_SET_CONTROLLED_ENTITY:
-          on_set_controlled_entity(event.packet);
-          break;
-        case E_SERVER_TO_CLIENT_SNAPSHOT:
-          on_snapshot(event.packet);
-          break;
-        };
-        break;
-      default:
-        break;
-      };
-    }
-    if (my_entity != invalid_entity)
-    {
-      bool left = app_keypressed(GLFW_KEY_LEFT);
-      bool right = app_keypressed(GLFW_KEY_RIGHT);
-      bool up = app_keypressed(GLFW_KEY_UP);
-      bool down = app_keypressed(GLFW_KEY_DOWN);
-      // TODO: Direct adressing, of course!
-      for (Entity &e : entities)
-        if (e.eid == my_entity)
-        {
-          // Update
-          e.x += ((left ? -dt : 0.f) + (right ? +dt : 0.f)) * 10.f;
-          e.y += ((up ? +dt : 0.f) + (down ? -dt : 0.f)) * 10.f;
-
-          // Send
-          send_entity_state(serverPeer, my_entity, e.x, e.y);
+            e.bodySize = bodySize;
         }
-    }
+}
 
-    app_poll_events();
-    // Handle window resize.
-    app_handle_resize(width, height);
-    bx::mtxProj(proj, 60.0f, float(width)/float(height), 0.1f, 100.0f, bgfx::getCaps()->homogeneousDepth);
-    bgfx::setViewTransform(0, view, proj);
+void on_my_entity_eaten(ENetPacket* packet)
+{
+    uint16_t eid = invalid_entity;
+    float x = 0.f; float y = 0.f; float bodySize = 10.f;
+    float size;
+    deserialize_eaten_entity(packet, eid, x, y, bodySize);
+    // TODO: Direct adressing, of course!
+    for (Entity& e : entities)
+        if (e.eid == eid)
+        {
+            e.x = x;
+            e.y = y;
+            e.bodySize = bodySize;
+        }
+}
 
-    // This dummy draw call is here to make sure that view 0 is cleared if no other draw calls are submitted to view 0.
-    const bgfx::ViewId kClearView = 0;
-    bgfx::touch(kClearView);
+void on_new_entity_packet(ENetPacket* packet)
+{
+    Entity newEntity;
+    deserialize_new_entity(packet, newEntity);
+    // TODO: Direct adressing, of course!
+    for (const Entity& e : entities)
+        if (e.eid == newEntity.eid)
+            return; // don't need to do anything, we already have entity
+    entities.push_back(newEntity);
+    printf("new entity\n");
+}
 
-    DebugDrawEncoder dde;
+void on_set_controlled_entity(ENetPacket* packet)
+{
+    deserialize_set_controlled_entity(packet, my_entity);
+}
 
-    dde.begin(0);
+void on_snapshot(ENetPacket* packet)
+{
+    uint16_t eid = invalid_entity;
+    float x = 0.f; float y = 0.f; float bodySize = 10.f;
+    float size;
+    deserialize_snapshot(packet, eid, x, y, bodySize);
+    // TODO: Direct adressing, of course!
+    for (Entity& e : entities)
+        if (e.eid == eid)
+        {
+            e.x = x;
+            e.y = y;
+            e.bodySize = bodySize;
+        }
+}
 
-    for (const Entity &e : entities)
+int main(int argc, const char** argv)
+{
+    if (enet_initialize() != 0)
     {
-      dde.push();
-
-        dde.setColor(e.color);
-        dde.drawQuad(bx::Vec3(0.f,0.f,1.f), bx::Vec3(e.x, e.y, -0.01f), 1.f);
-
-      dde.pop();
+        printf("Cannot init ENet");
+        return 1;
     }
 
-    dde.end();
+    ENetHost* client = enet_host_create(nullptr, 1, 2, 0, 0);
+    if (!client)
+    {
+        printf("Cannot create ENet client\n");
+        return 1;
+    }
 
-    // Advance to next frame. Process submitted rendering primitives.
-    bgfx::frame();
-    const double freq = double(bx::getHPFrequency());
-    int64_t now = bx::getHPCounter();
-    dt = (float)((now - last) / freq);
-    last = now;
-  }
-  ddShutdown();
-  bgfx::shutdown();
-  app_terminate();
-  return 0;
+    ENetAddress address;
+    enet_address_set_host(&address, "127.0.0.1");
+    address.port = 10131;
+
+    ENetPeer* serverPeer = enet_host_connect(client, &address, 2, 0);
+    if (!serverPeer)
+    {
+        printf("Cannot connect to server");
+        return 1;
+    }
+
+    int width = win_width;
+    int height = win_height;
+
+    InitWindow(width, height, "w4 MIPT");
+
+    const int scrWidth = GetMonitorWidth(0);
+    const int scrHeight = GetMonitorHeight(0);
+    if (scrWidth < width || scrHeight < height)
+    {
+        width = std::min(scrWidth, width);
+        height = std::min(scrHeight - 150, height);
+        SetWindowSize(width, height);
+    }
+
+    Camera2D camera = { {0, 0}, {0, 0}, 0.f, 1.f };
+    camera.target = Vector2{ 0.f, 0.f };
+    camera.offset = Vector2{ width * 0.5f, height * 0.5f };
+    camera.rotation = 0.f;
+    camera.zoom = 1.f;
+
+    SetTargetFPS(60);               // Set our game to run at 60 frames-per-second
+
+    bool connected = false;
+    while (!WindowShouldClose())
+    {
+        float dt = GetFrameTime();
+        ENetEvent event;
+        while (enet_host_service(client, &event, 0) > 0)
+        {
+            switch (event.type)
+            {
+            case ENET_EVENT_TYPE_CONNECT:
+                printf("Connection with %x:%u established\n", event.peer->address.host, event.peer->address.port);
+                send_join(serverPeer);
+                connected = true;
+                break;
+            case ENET_EVENT_TYPE_RECEIVE:
+                switch (get_packet_type(event.packet))
+                {
+                case E_SERVER_TO_CLIENT_NEW_ENTITY:
+                    on_new_entity_packet(event.packet);
+                    break;
+                case E_SERVER_TO_CLIENT_SET_CONTROLLED_ENTITY:
+                    on_set_controlled_entity(event.packet);
+                    break;
+                case E_SERVER_TO_CLIENT_SNAPSHOT:
+                    on_snapshot(event.packet);
+                    break;
+                case E_SERVER_TO_CLIENT_CONTROLLED_ENTITY_EATEN:
+                    on_my_entity_eaten(event.packet);
+                    break;
+                case E_SERVER_TO_CLIENT_CONTROLLED_ENTITY_EAT:
+                    on_my_entity_eat(event.packet);
+                    break;
+                };
+                enet_packet_destroy(event.packet);
+                break;
+            default:
+                break;
+            };
+        }
+        if (my_entity != invalid_entity)
+        {
+            bool left = IsKeyDown(KEY_LEFT);
+            bool right = IsKeyDown(KEY_RIGHT);
+            bool up = IsKeyDown(KEY_UP);
+            bool down = IsKeyDown(KEY_DOWN);
+            // TODO: Direct adressing, of course!
+            for (Entity& e : entities)
+                if (e.eid == my_entity)
+                {
+                    // Update
+                    e.x += ((left ? -dt : 0.f) + (right ? +dt : 0.f)) * 100.f;
+                    e.y += ((up ? -dt : 0.f) + (down ? +dt : 0.f)) * 100.f;
+
+                    // Send
+                    send_entity_state(serverPeer, my_entity, e.x, e.y);
+                }
+        }
+
+
+        BeginDrawing();
+        ClearBackground(GRAY);
+        BeginMode2D(camera);
+        for (const Entity& e : entities)
+        {
+            const Rectangle rect = { e.x, e.y, e.bodySize, e.bodySize };
+            DrawRectangleRec(rect, GetColor(e.color));
+        }
+
+        EndMode2D();
+        EndDrawing();
+    }
+
+    CloseWindow();
+
+    return 0;
 }
